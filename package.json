@@ -1,0 +1,19 @@
+{
+  "name": "identity-history-export",
+  "private": true,
+  "type": "module",
+  "description": "Export one ISC identity's history to CSV with the SailPoint TypeScript SDK.",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "start": "tsx export-identity-history.ts",
+    "self-test": "tsx export-identity-history.ts --self-test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "sailpoint-api-client": "^2.1.28"
+  }
+}
