@@ -23,8 +23,10 @@
  * accessItemCount is a dictionary. Inventory counts come from the access-items
  * call. Snapshots have no identity profile, so profile fields are not reported.
  *
- *   npx tsx export-identity-history.ts --id <identity-id>
- *   npx tsx export-identity-history.ts --id <identity-id> --start all --out ./out --workers 4
+ * The identity id is requested at the prompt. It is not a command-line flag.
+ *
+ *   npx tsx export-identity-history.ts
+ *   npx tsx export-identity-history.ts --start all --out ./out --workers 4
  *   npx tsx export-identity-history.ts --self-test
  */
 
@@ -65,7 +67,6 @@ type StartBound =
   | { mode: "date"; iso: string; ms: number };
 
 type Options = {
-  id: string;
   start: StartBound;
   out: string;
   workers: number;
@@ -436,7 +437,7 @@ function parseInstant(value: string, label: string): number {
 
 function assertIdentityId(id: string): string {
   const trimmed = id.trim();
-  if (!trimmed) throw new Error("Identity ID is required. Pass --id or enter one at the prompt.");
+  if (!trimmed) throw new Error("Identity ID is required.");
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,200}$/.test(trimmed)) {
     throw new Error(
       "Identity ID contains unsupported characters. Expected the ISC identity id (letters, digits, hyphen).",
@@ -467,7 +468,6 @@ function parseStart(value: string): StartBound {
 
 function parseArgs(argv: string[]): Options {
   const options: Options = {
-    id: "",
     start: parseStart(DEFAULT_START),
     out: "",
     workers: DEFAULT_WORKERS,
@@ -481,8 +481,9 @@ function parseArgs(argv: string[]): Options {
       return value;
     };
     if (arg === "--self-test") options.selfTest = true;
-    else if (arg === "--id") options.id = next();
-    else if (arg.startsWith("--id=")) options.id = arg.slice("--id=".length);
+    else if (arg === "--id" || arg.startsWith("--id=")) {
+      throw new Error("The identity id is collected at the prompt. Remove --id and run the command again.");
+    }
     else if (arg === "--start") options.start = parseStart(next());
     else if (arg.startsWith("--start=")) options.start = parseStart(arg.slice("--start=".length));
     else if (arg === "--out") options.out = next();
@@ -508,9 +509,10 @@ function parseWorkers(value: string): number {
 }
 
 function printHelp(): void {
-  console.log(`Usage: npx tsx export-identity-history.ts [--id <identity-id>] [--start <YYYY-MM-DD|all>] [--out <dir>] [--workers <n>]
+  console.log(`Usage: npx tsx export-identity-history.ts [--start <YYYY-MM-DD|all>] [--out <dir>] [--workers <n>]
 
 Reads Identity History for one identity and writes CSV files.
+The identity id is requested at the prompt.
 --start defaults to ${DEFAULT_START} and is interpreted as UTC midnight.
 --start all diffs every consecutive snapshot.
 A snapshot before the start date is the baseline and is not listed as its own inventory row.
@@ -1055,8 +1057,7 @@ function printSummary(outDir: string, files: Array<{ name: string; headers: stri
 }
 
 async function exportIdentity(options: Options): Promise<void> {
-  const id = options.id || (await promptIdentityId());
-  const identityId = assertIdentityId(id);
+  const identityId = assertIdentityId(await promptIdentityId());
   const outDir = path.resolve(options.out || "identity-history-out");
   const clients = createClients();
 
