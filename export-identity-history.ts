@@ -23,10 +23,13 @@
  * accessItemCount is a dictionary. Inventory counts come from the access-items
  * call. Snapshots have no identity profile, so profile fields are not reported.
  *
- * The identity id is requested at the prompt. It is not a command-line flag.
+ * The identity id and the start date are requested at the prompt. They are
+ * not command-line flags. On a terminal, the start date uses a month calendar:
+ * arrow keys move the day, Enter selects that UTC midnight, and A selects all
+ * history. Without a terminal, type YYYY-MM-DD or all.
  *
  *   npx tsx export-identity-history.ts
- *   npx tsx export-identity-history.ts --start all --out ./out --workers 4
+ *   npx tsx export-identity-history.ts --out ./out --workers 4
  *   npx tsx export-identity-history.ts --self-test
  */
 
@@ -45,7 +48,6 @@ const sailpoint = require("sailpoint-api-client") as typeof import("sailpoint-ap
 const PAGE_LIMIT = 250;
 const REQUEST_TIMEOUT_MS = positiveInt(process.env.SAIL_TIMEOUT_MS, 120_000);
 const MAX_ATTEMPTS = 6;
-const DEFAULT_START = "2026-03-01";
 const DEFAULT_WORKERS = 4;
 
 const SKIPPED_ATTRIBUTES = new Set([
@@ -67,10 +69,15 @@ type StartBound =
   | { mode: "date"; iso: string; ms: number };
 
 type Options = {
-  start: StartBound;
   out: string;
   workers: number;
   selfTest: boolean;
+};
+
+type CalendarDay = {
+  year: number;
+  month: number;
+  day: number;
 };
 
 type AccessItem = {
@@ -449,7 +456,7 @@ function assertIdentityId(id: string): string {
 function parseStart(value: string): StartBound {
   if (value.toLowerCase() === "all") return { mode: "all" };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    throw new Error(`--start must be YYYY-MM-DD or "all". Received: ${value}`);
+    throw new Error(`Start date must be YYYY-MM-DD or "all". Received: ${value}`);
   }
   const iso = `${value}T00:00:00.000Z`;
   const ms = Date.parse(iso);
@@ -461,14 +468,13 @@ function parseStart(value: string): StartBound {
     parsed.getUTCMonth() + 1 !== month ||
     parsed.getUTCDate() !== day
   ) {
-    throw new Error(`--start is not a real calendar date: ${value}`);
+    throw new Error(`Start date is not a real calendar date: ${value}`);
   }
   return { mode: "date", iso, ms };
 }
 
 function parseArgs(argv: string[]): Options {
   const options: Options = {
-    start: parseStart(DEFAULT_START),
     out: "",
     workers: DEFAULT_WORKERS,
     selfTest: false,
@@ -484,8 +490,9 @@ function parseArgs(argv: string[]): Options {
     else if (arg === "--id" || arg.startsWith("--id=")) {
       throw new Error("The identity id is collected at the prompt. Remove --id and run the command again.");
     }
-    else if (arg === "--start") options.start = parseStart(next());
-    else if (arg.startsWith("--start=")) options.start = parseStart(arg.slice("--start=".length));
+    else if (arg === "--start" || arg.startsWith("--start=")) {
+      throw new Error("The start date is collected with the date picker. Remove --start and run the command again.");
+    }
     else if (arg === "--out") options.out = next();
     else if (arg.startsWith("--out=")) options.out = arg.slice("--out=".length);
     else if (arg === "--workers") options.workers = parseWorkers(next());
@@ -509,12 +516,12 @@ function parseWorkers(value: string): number {
 }
 
 function printHelp(): void {
-  console.log(`Usage: npx tsx export-identity-history.ts [--start <YYYY-MM-DD|all>] [--out <dir>] [--workers <n>]
+  console.log(`Usage: npx tsx export-identity-history.ts [--out <dir>] [--workers <n>]
 
 Reads Identity History for one identity and writes CSV files.
 The identity id is requested at the prompt.
---start defaults to ${DEFAULT_START} and is interpreted as UTC midnight.
---start all diffs every consecutive snapshot.
+The start date is chosen with a console date picker. Arrow keys move the day, Enter selects that UTC midnight, and A selects all history.
+When the terminal is not interactive, enter YYYY-MM-DD or all at the start-date prompt.
 A snapshot before the start date is the baseline and is not listed as its own inventory row.
 Each SDK request times out after ${REQUEST_TIMEOUT_MS}ms. Override that with SAIL_TIMEOUT_MS.
 Credentials come from SAIL_BASE_URL, SAIL_CLIENT_ID, and SAIL_CLIENT_SECRET, or from config.json.
@@ -529,6 +536,193 @@ async function promptIdentityId(): Promise<string> {
   } finally {
     rl.close();
   }
+}
+
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+const ARROW_DELTA: Record<string, number> = {
+  "\u001b[A": -7,
+  "\u001b[B": 7,
+  "\u001b[C": 1,
+  "\u001b[D": -1,
+};
+
+function utcToday(): CalendarDay {
+  const now = new Date();
+  return { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1, day: now.getUTCDate() };
+}
+
+function shiftUtcDay(day: CalendarDay, delta: number): CalendarDay {
+  const next = new Date(Date.UTC(day.year, day.month - 1, day.day + delta));
+  return { year: next.getUTCFullYear(), month: next.getUTCMonth() + 1, day: next.getUTCDate() };
+}
+
+function formatCalendarDay(day: CalendarDay): string {
+  const month = String(day.month).padStart(2, "0");
+  const date = String(day.day).padStart(2, "0");
+  return `${day.year}-${month}-${date}`;
+}
+
+function renderCalendar(cursor: CalendarDay): string {
+  const width = 20;
+  const firstWeekday = new Date(Date.UTC(cursor.year, cursor.month - 1, 1)).getUTCDay();
+  const daysInMonth = new Date(Date.UTC(cursor.year, cursor.month, 0)).getUTCDate();
+  const cells: string[] = [];
+  for (let index = 0; index < firstWeekday; index++) cells.push("  ");
+  for (let day = 1; day <= daysInMonth; day++) {
+    const text = String(day).padStart(2, " ");
+    cells.push(day === cursor.day ? `\x1b[7m${text}\x1b[0m` : text);
+  }
+  while (cells.length < 42) cells.push("  ");
+  const rows: string[] = [];
+  for (let index = 0; index < cells.length; index += 7) rows.push(cells.slice(index, index + 7).join(" "));
+  const title = `${MONTH_NAMES[cursor.month - 1]} ${cursor.year}`;
+  const pad = Math.max(0, Math.floor((width - title.length) / 2));
+  return [
+    "Arrow keys move the day. Enter selects UTC midnight. A selects all history.",
+    "",
+    `${" ".repeat(pad)}${title}`,
+    "Su Mo Tu We Th Fr Sa",
+    ...rows,
+  ].join("\n");
+}
+
+function paintCalendar(cursor: CalendarDay, previousLines: number): number {
+  const body = renderCalendar(cursor);
+  if (previousLines > 0) output.write(`\x1b[${previousLines}A\x1b[J`);
+  output.write(`${body}\n`);
+  return body.split("\n").length;
+}
+
+function promptStartDatePicker(): Promise<StartBound> {
+  return new Promise((resolve, reject) => {
+    let cursor = utcToday();
+    let painted = 0;
+    let pending = "";
+    let settled = false;
+    output.write("\x1b[?25l");
+    input.setRawMode(true);
+    input.resume();
+    painted = paintCalendar(cursor, painted);
+
+    const finish = (done: () => void): void => {
+      if (settled) return;
+      settled = true;
+      input.off("data", onData);
+      input.off("end", onEnd);
+      if (input.isTTY) input.setRawMode(false);
+      input.pause();
+      output.write("\x1b[?25h");
+      done();
+    };
+    const onEnd = (): void => {
+      finish(() => reject(new Error("Start date is required.")));
+    };
+    const onData = (chunk: Buffer | string): void => {
+      pending += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      while (pending.length > 0 && !settled) {
+        if (pending.startsWith("\u001b")) {
+          if (pending.length < 3) return;
+          const sequence = pending.slice(0, 3);
+          pending = pending.slice(3);
+          const delta = ARROW_DELTA[sequence] ?? 0;
+          if (delta !== 0) {
+            cursor = shiftUtcDay(cursor, delta);
+            painted = paintCalendar(cursor, painted);
+          }
+          continue;
+        }
+        const key = pending[0];
+        pending = pending.slice(1);
+        if (key === "\u0003") {
+          finish(() => process.exit(130));
+          return;
+        }
+        if (key === "a" || key === "A") {
+          finish(() => {
+            output.write("Start date: all history\n");
+            resolve({ mode: "all" });
+          });
+          return;
+        }
+        if (key === "\r" || key === "\n") {
+          const value = formatCalendarDay(cursor);
+          finish(() => {
+            output.write(`Start date: ${value}\n`);
+            resolve(parseStart(value));
+          });
+          return;
+        }
+      }
+    };
+    input.on("data", onData);
+    input.on("end", onEnd);
+  });
+}
+
+async function promptPipedInputs(): Promise<{ identityId: string; start: StartBound }> {
+  const rl = readline.createInterface({ input, output, terminal: false });
+  const buffered: string[] = [];
+  let waiter: ((line: string | null) => void) | null = null;
+  let ended = false;
+  rl.on("line", (line: string) => {
+    if (waiter) {
+      const pending = waiter;
+      waiter = null;
+      pending(line);
+      return;
+    }
+    buffered.push(line);
+  });
+  rl.on("close", () => {
+    ended = true;
+    if (!waiter) return;
+    const pending = waiter;
+    waiter = null;
+    pending(null);
+  });
+  const nextLine = (prompt: string): Promise<string | null> => {
+    output.write(prompt);
+    const queued = buffered.shift();
+    if (queued !== undefined) return Promise.resolve(queued);
+    if (ended) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      waiter = resolve;
+    });
+  };
+  try {
+    const idLine = await nextLine("Identity ID: ");
+    if (idLine === null) throw new Error("Identity ID is required.");
+    const identityId = assertIdentityId(idLine.trim());
+    const dateLine = await nextLine("Start date (YYYY-MM-DD or all): ");
+    if (dateLine === null || !dateLine.trim()) {
+      throw new Error("Start date is required. Enter YYYY-MM-DD or all.");
+    }
+    return { identityId, start: parseStart(dateLine.trim()) };
+  } finally {
+    rl.close();
+  }
+}
+
+async function promptInputs(): Promise<{ identityId: string; start: StartBound }> {
+  if (input.isTTY && output.isTTY) {
+    const identityId = assertIdentityId(await promptIdentityId());
+    return { identityId, start: await promptStartDatePicker() };
+  }
+  return promptPipedInputs();
 }
 
 function lookupAttribute(attributes: Record<string, unknown>, name: string): unknown {
@@ -1057,7 +1251,7 @@ function printSummary(outDir: string, files: Array<{ name: string; headers: stri
 }
 
 async function exportIdentity(options: Options): Promise<void> {
-  const identityId = assertIdentityId(await promptIdentityId());
+  const { identityId, start } = await promptInputs();
   const outDir = path.resolve(options.out || "identity-history-out");
   const clients = createClients();
 
@@ -1096,7 +1290,6 @@ async function exportIdentity(options: Options): Promise<void> {
   dates.sort((a, b) => Date.parse(a) - Date.parse(b) || a.localeCompare(b));
   info(`Found ${dates.length} snapshot(s), from ${dates[0]} through ${dates[dates.length - 1]}.`);
 
-  const start = options.start;
   let inRange = dates;
   let baselineDate: string | null = null;
   if (start.mode === "date") {
@@ -1108,12 +1301,12 @@ async function exportIdentity(options: Options): Promise<void> {
   if (inRange.length === 0) {
     const startLabel = start.mode === "all" ? "all" : start.iso;
     throw new Error(
-      `No snapshots on or after ${startLabel}. The latest snapshot is ${dates[dates.length - 1]}. Use --start all to include earlier history.`,
+      `No snapshots on or after ${startLabel}. The latest snapshot is ${dates[dates.length - 1]}. Choose all history in the date picker to include earlier history.`,
     );
   }
   const toLoad = baselineDate ? [baselineDate, ...inRange] : inRange;
   if (baselineDate) info(`Baseline snapshot before the start date: ${baselineDate}`);
-  else if (options.start.mode === "date") {
+  else if (start.mode === "date") {
     info("No snapshot exists before the start date. The earliest in-range snapshot has no incoming diff.");
   }
 
@@ -1129,10 +1322,10 @@ async function exportIdentity(options: Options): Promise<void> {
   const sample = loaded.find((snapshot) => inRange.includes(snapshot.date)) ?? loaded[0];
   inspectShapes(sample?.detail, sample?.sampleItem, rawEvents, sample?.items.length ?? 0);
 
-  const { window, pairs } = selectWindow(loaded, options.start);
+  const { window, pairs } = selectWindow(loaded, start);
   info(`${window.length} snapshot(s) in range, ${pairs.length} consecutive pair(s), ${rawEvents.length} event(s) before date filtering.`);
 
-  const report = buildReport(loaded, rawEvents, options.start, catalog);
+  const report = buildReport(loaded, rawEvents, start, catalog);
   const files: Array<{ name: string; headers: string[]; rows: string[][] }> = [
     {
       name: "identity_correlation.csv",
@@ -1324,6 +1517,12 @@ function selfTest(): void {
     startFailed = true;
   }
   assert(startFailed, "invalid calendar date");
+  const nextMonth = shiftUtcDay({ year: 2026, month: 3, day: 31 }, 1);
+  assert(formatCalendarDay(nextMonth) === "2026-04-01", "calendar moves across a month");
+  const previousMonth = shiftUtcDay({ year: 2026, month: 3, day: 1 }, -1);
+  assert(formatCalendarDay(previousMonth) === "2026-02-28", "calendar moves to the previous month");
+  const week = shiftUtcDay({ year: 2026, month: 3, day: 8 }, -7);
+  assert(formatCalendarDay(week) === "2026-03-01", "calendar moves by a week");
   console.log("self-test passed");
 }
 

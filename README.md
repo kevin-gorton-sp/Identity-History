@@ -60,7 +60,7 @@ The SDK also accepts the same three values as environment variables, `SAIL_CLIEN
 
 ## Prompts
 
-Starting the export asks for one value. The date window, output directory, and worker count are flags, not prompts.
+Starting the export asks for the identity id, then the start date. The output directory and worker count stay on the command line.
 
 ### Identity ID
 
@@ -74,18 +74,41 @@ The id must start with a letter or digit. The rest may contain letters, digits, 
 
 `--id` is not accepted. Enter the id at this prompt.
 
+### Start date
+
+On a terminal, the next prompt is a month calendar. It opens on today's UTC date.
+
+| Key | Action |
+| --- | --- |
+| Left / Right | Move one day. |
+| Up / Down | Move one week. |
+| Enter | Use the highlighted day as UTC midnight. |
+| A | Use all history. |
+
+Moving past the first or last day of a month changes the month. A snapshot before the selected day is the baseline for the first diff and is not written as its own inventory or account-state row. All history diffs every consecutive snapshot and includes every event.
+
+`--start` is not accepted. Choose the date in this picker.
+
+When stdin or stdout is not a terminal, the calendar is replaced by a line:
+
+```text
+Start date (YYYY-MM-DD or all):
+```
+
+Enter a calendar date or `all`. An empty line stops the run.
+
 ## Run
 
 ```bash
 npx tsx export-identity-history.ts
 ```
 
-`npm start` runs the same command and shows the same prompt.
+`npm start` runs the same command and shows the same prompts.
 
 Other options stay on the command line:
 
 ```bash
-npx tsx export-identity-history.ts --start all --out ./out --workers 4
+npx tsx export-identity-history.ts --out ./out --workers 4
 ```
 
 `--help` or `-h` prints the usage text.
@@ -94,13 +117,12 @@ npx tsx export-identity-history.ts --start all --out ./out --workers 4
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--start <YYYY-MM-DD\|all>` | `2026-03-01` | First snapshot date to report, as UTC midnight. `all` diffs every consecutive snapshot. |
 | `--out <dir>` | `identity-history-out` | Directory for the CSV files. Relative paths are resolved from the working directory. |
 | `--workers <n>` | `4` | Parallel snapshot loads. An integer from 1 to 32. |
 | `--self-test` | | Run the local checks and exit. No prompt and no tenant call. |
 | `--help`, `-h` | | Print usage and exit. |
 
-A date before the start is kept as the baseline for the first diff and is not written as its own inventory or account-state row. If nothing falls on or after the start date, the run stops and names the latest snapshot it found.
+If nothing falls on or after the selected date, the run stops and names the latest snapshot it found.
 
 Each SDK request times out after 120 seconds. Set `SAIL_TIMEOUT_MS` to change that. Retryable failures (HTTP 408, 429, 500, 502, 503, and 504, plus request timeouts) are tried up to 6 times. An authentication failure stops immediately.
 
