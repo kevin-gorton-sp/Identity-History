@@ -158,6 +158,43 @@ Run the local self-test. It loads the SDK and checks diff, date-window, and retr
 npm run self-test
 ```
 
+## Standalone executable
+
+Build a copy that runs without Node.js installed. From this directory, on a machine with Node.js 22:
+
+```bash
+npm install
+npm run executable
+```
+
+The command bundles the script and the SailPoint SDK, then injects that bundle into official Node.js 22.23.4 binaries. It writes five files in `dist/`:
+
+| File | Run on |
+| --- | --- |
+| `identity-history-macos-arm64` | macOS, Apple silicon |
+| `identity-history-macos-x64` | macOS, Intel |
+| `identity-history-windows-x64.exe` | 64-bit Windows |
+| `identity-history-linux-x64` | 64-bit Linux |
+| `identity-history-linux-arm64` | 64-bit ARM Linux |
+
+`dist/` is gitignored. The build downloads the Node.js archives once and checks them against the published SHA-256 sums.
+
+Run the file for the machine you are on. The prompts, `--start`, `--out`, and `--workers` are the same as `npx tsx export-identity-history.ts`. Put `config.json` in the working directory, or set `SAIL_BASE_URL`, `SAIL_CLIENT_ID`, and `SAIL_CLIENT_SECRET`.
+
+```bash
+./dist/identity-history-linux-x64
+./dist/identity-history-macos-arm64 --out ./out --workers 4
+dist\identity-history-windows-x64.exe --self-test
+```
+
+On macOS, Gatekeeper can reject the unsigned file. From the directory that contains it:
+
+```bash
+codesign --sign - identity-history-macos-arm64
+```
+
+Use the Intel file name on an Intel Mac. Windows can run the `.exe` without a signature. A warning from the injection step about a missing Windows or macOS signature does not stop the build.
+
 ## APIs
 
 The script calls:
