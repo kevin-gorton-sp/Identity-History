@@ -85,7 +85,7 @@ npx tsx export-identity-history.ts
 Other options stay on the command line:
 
 ```bash
-npx tsx export-identity-history.ts --start all --out ./out --workers 4
+npx tsx export-identity-history.ts --start 2026-03-01 --out ./out --workers 4
 ```
 
 `--help` or `-h` prints the usage text.
@@ -94,13 +94,13 @@ npx tsx export-identity-history.ts --start all --out ./out --workers 4
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--start <YYYY-MM-DD\|all>` | `2026-03-01` | First snapshot date to report, as UTC midnight. `all` diffs every consecutive snapshot. |
+| `--start <YYYY-MM-DD\|all>` | `all` | First snapshot date to report, as UTC midnight. `all` diffs every consecutive snapshot. |
 | `--out <dir>` | `identity-history-out` | Directory for the CSV files. Relative paths are resolved from the working directory. |
 | `--workers <n>` | `4` | Parallel snapshot loads. An integer from 1 to 32. |
 | `--self-test` | | Run the local checks and exit. No prompt and no tenant call. |
 | `--help`, `-h` | | Print usage and exit. |
 
-A date before the start is kept as the baseline for the first diff and is not written as its own inventory or account-state row. If nothing falls on or after the start date, the run stops and names the latest snapshot it found.
+With `all`, the run loads every snapshot and every event. With a date, a snapshot before the start is kept as the baseline for the first diff and is not written as its own inventory or account-state row. If nothing falls on or after the start date, the run stops and names the latest snapshot it found.
 
 Each SDK request times out after 120 seconds. Set `SAIL_TIMEOUT_MS` to change that. Retryable failures (HTTP 408, 429, 500, 502, 503, and 504, plus request timeouts) are tried up to 6 times. An authentication failure stops immediately.
 

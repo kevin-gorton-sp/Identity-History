@@ -45,7 +45,6 @@ const sailpoint = require("sailpoint-api-client") as typeof import("sailpoint-ap
 const PAGE_LIMIT = 250;
 const REQUEST_TIMEOUT_MS = positiveInt(process.env.SAIL_TIMEOUT_MS, 120_000);
 const MAX_ATTEMPTS = 6;
-const DEFAULT_START = "2026-03-01";
 const DEFAULT_WORKERS = 4;
 
 const SKIPPED_ATTRIBUTES = new Set([
@@ -468,7 +467,7 @@ function parseStart(value: string): StartBound {
 
 function parseArgs(argv: string[]): Options {
   const options: Options = {
-    start: parseStart(DEFAULT_START),
+    start: { mode: "all" },
     out: "",
     workers: DEFAULT_WORKERS,
     selfTest: false,
@@ -513,9 +512,8 @@ function printHelp(): void {
 
 Reads Identity History for one identity and writes CSV files.
 The identity id is requested at the prompt.
---start defaults to ${DEFAULT_START} and is interpreted as UTC midnight.
---start all diffs every consecutive snapshot.
-A snapshot before the start date is the baseline and is not listed as its own inventory row.
+--start defaults to all and diffs every consecutive snapshot.
+A date is interpreted as UTC midnight. A snapshot before that date is the baseline and is not listed as its own inventory row.
 Each SDK request times out after ${REQUEST_TIMEOUT_MS}ms. Override that with SAIL_TIMEOUT_MS.
 Credentials come from SAIL_BASE_URL, SAIL_CLIENT_ID, and SAIL_CLIENT_SECRET, or from config.json.
 `);
