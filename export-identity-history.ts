@@ -13,9 +13,9 @@
  * sends X-SailPoint-Experimental: true. The token needs idn:identity-history:read.
  *
  * Credentials, first match wins:
- *   SAIL_BASE_URL, SAIL_CLIENT_ID, SAIL_CLIENT_SECRET
- *   ./config.json with ClientId, ClientSecret, BaseURL
- *   ~/.sailpoint/config.yaml written by the SailPoint CLI
+ *   SAIL_BASE_URL, SAIL_CLIENT_ID, and SAIL_CLIENT_SECRET
+ *   ./config.json with ClientId, ClientSecret, and BaseURL
+ *   If neither is complete, the export prompts for tenant URL, client ID, and secret.
  *
  * `start` and `interval` are not sent on the snapshot list (start returns 400
  * on the historical-identities API). `from` is not sent on events (that filter
@@ -31,7 +31,7 @@
  */
 
 import { createRequire } from "node:module";
-import { createWriteStream } from "node:fs";
+import { createWriteStream, readFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline/promises";
@@ -127,6 +127,13 @@ type Report = {
 type SdkClients = {
   history: IdentityHistoryApi;
   sources: SourcesApi;
+};
+
+type SdkCredentialParams = {
+  baseurl: string;
+  clientId: string;
+  clientSecret: string;
+  tokenUrl: string;
 };
 
 type SdkFailure = {
@@ -265,11 +272,99 @@ function silenceExperimentalLog(): void {
   };
 }
 
-function createClients(): SdkClients {
-  const configuration = new sailpoint.Configuration();
+function normalizeTenantUrl(url: string): string {
+  return url.trim().replace(/\/+$/, "");
+}
+
+function readEnvCredentials(): SdkCredentialParams | null {
+  const baseurl = process.env.SAIL_BASE_URL?.trim() ?? "";
+  const clientId = process.env.SAIL_CLIENT_ID?.trim() ?? "";
+  const clientSecret = process.env.SAIL_CLIENT_SECRET?.trim() ?? "";
+  if (!baseurl || !clientId || !clientSecret) return null;
+  const normalized = normalizeTenantUrl(baseurl);
+  return {
+    baseurl: normalized,
+    clientId,
+    clientSecret,
+    tokenUrl: `${normalized}/oauth/token`,
+  };
+}
+
+function readLocalConfigCredentials(): SdkCredentialParams | null {
+  try {
+    const jsonString = readFileSync(path.join(process.cwd(), "config.json"), "utf8");
+    const jsonData = JSON.parse(jsonString) as Record<string, unknown>;
+    const baseurl = formatValue(jsonData.BaseURL).trim();
+    const clientId = formatValue(jsonData.ClientId).trim();
+    const clientSecret = formatValue(jsonData.ClientSecret).trim();
+    if (!baseurl || !clientId || !clientSecret) return null;
+    const normalized = normalizeTenantUrl(baseurl);
+    return {
+      baseurl: normalized,
+      clientId,
+      clientSecret,
+      tokenUrl: `${normalized}/oauth/token`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function assertTenantUrl(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) throw new Error("Tenant URL is required.");
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(`Tenant URL is not a valid URL: ${trimmed}`);
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error("Tenant URL must use https.");
+  }
+  if (!parsed.hostname) {
+    throw new Error("Tenant URL must include a hostname.");
+  }
+  return normalizeTenantUrl(trimmed);
+}
+
+function assertClientId(clientId: string): string {
+  const trimmed = clientId.trim();
+  if (!trimmed) throw new Error("Client ID is required.");
+  return trimmed;
+}
+
+function assertClientSecret(clientSecret: string): string {
+  const trimmed = clientSecret.trim();
+  if (!trimmed) throw new Error("Client secret is required.");
+  return trimmed;
+}
+
+async function promptSdkCredentials(): Promise<SdkCredentialParams> {
+  const [baseRaw, clientIdRaw, clientSecretRaw] = await promptLines([
+    "Tenant URL (API base URL): ",
+    "Client ID: ",
+    "Client secret: ",
+  ]);
+  const baseurl = assertTenantUrl(baseRaw);
+  const clientId = assertClientId(clientIdRaw);
+  const clientSecret = assertClientSecret(clientSecretRaw);
+  return {
+    baseurl,
+    clientId,
+    clientSecret,
+    tokenUrl: `${baseurl}/oauth/token`,
+  };
+}
+
+async function createClients(prompted: SdkCredentialParams | null): Promise<SdkClients> {
+  const configuration = prompted
+    ? new sailpoint.Configuration(prompted)
+    : new sailpoint.Configuration();
+  await configuration.ready;
   if (!configuration.basePath || !configuration.clientId || !configuration.clientSecret) {
     throw new SailCallError(
-      "No SailPoint credentials found. Set SAIL_BASE_URL, SAIL_CLIENT_ID, and SAIL_CLIENT_SECRET, or create config.json with ClientId, ClientSecret, and BaseURL. The SDK also reads ~/.sailpoint/config.yaml.",
+      "No SailPoint credentials found. Set SAIL_BASE_URL, SAIL_CLIENT_ID, and SAIL_CLIENT_SECRET, create config.json, or enter the values at the prompt.",
       false,
     );
   }
@@ -517,18 +612,70 @@ The identity id is requested at the prompt.
 --start all diffs every consecutive snapshot.
 A snapshot before the start date is the baseline and is not listed as its own inventory row.
 Each SDK request times out after ${REQUEST_TIMEOUT_MS}ms. Override that with SAIL_TIMEOUT_MS.
-Credentials come from SAIL_BASE_URL, SAIL_CLIENT_ID, and SAIL_CLIENT_SECRET, or from config.json.
+Credentials come from SAIL_BASE_URL, SAIL_CLIENT_ID, and SAIL_CLIENT_SECRET, from config.json, or from the tenant prompt when neither is set.
 `);
 }
 
-async function promptIdentityId(): Promise<string> {
-  const rl = readline.createInterface({ input, output });
+function promptInterface() {
+  return readline.createInterface({
+    input,
+    output,
+    terminal: Boolean(input.isTTY && output.isTTY),
+  });
+}
+
+async function promptLines(labels: string[]): Promise<string[]> {
+  if (input.isTTY && output.isTTY) {
+    const rl = promptInterface();
+    try {
+      const answers: string[] = [];
+      for (const label of labels) answers.push((await rl.question(label)).trim());
+      return answers;
+    } finally {
+      rl.close();
+    }
+  }
+  const rl = readline.createInterface({ input, output, terminal: false });
+  const buffered: string[] = [];
+  let waiter: ((line: string | null) => void) | null = null;
+  let ended = false;
+  rl.on("line", (line: string) => {
+    if (waiter) {
+      const pending = waiter;
+      waiter = null;
+      pending(line);
+      return;
+    }
+    buffered.push(line);
+  });
+  rl.on("close", () => {
+    ended = true;
+    if (!waiter) return;
+    const pending = waiter;
+    waiter = null;
+    pending(null);
+  });
+  const nextLine = (label: string): Promise<string> => {
+    output.write(label);
+    const queued = buffered.shift();
+    if (queued !== undefined) return Promise.resolve(queued);
+    if (ended) return Promise.reject(new Error("Missing input."));
+    return new Promise((resolve, reject) => {
+      waiter = (line) => (line === null ? reject(new Error("Missing input.")) : resolve(line));
+    });
+  };
   try {
-    const answer = await rl.question("Identity ID: ");
-    return answer.trim();
+    const answers: string[] = [];
+    for (const label of labels) answers.push((await nextLine(label)).trim());
+    return answers;
   } finally {
     rl.close();
   }
+}
+
+async function promptIdentityId(): Promise<string> {
+  const [answer] = await promptLines(["Identity ID: "]);
+  return answer;
 }
 
 function lookupAttribute(attributes: Record<string, unknown>, name: string): unknown {
@@ -1056,10 +1203,43 @@ function printSummary(outDir: string, files: Array<{ name: string; headers: stri
   }
 }
 
+function buildPromptedCredentials(
+  baseRaw: string,
+  clientIdRaw: string,
+  clientSecretRaw: string,
+): SdkCredentialParams {
+  const baseurl = assertTenantUrl(baseRaw);
+  const clientId = assertClientId(clientIdRaw);
+  const clientSecret = assertClientSecret(clientSecretRaw);
+  return {
+    baseurl,
+    clientId,
+    clientSecret,
+    tokenUrl: `${baseurl}/oauth/token`,
+  };
+}
+
 async function exportIdentity(options: Options): Promise<void> {
-  const identityId = assertIdentityId(await promptIdentityId());
+  let identityId: string;
+  let clients: SdkClients;
+  if (readEnvCredentials() || readLocalConfigCredentials()) {
+    clients = await createClients(null);
+    identityId = assertIdentityId(await promptIdentityId());
+  } else if (input.isTTY && output.isTTY) {
+    const prompted = await promptSdkCredentials();
+    clients = await createClients(prompted);
+    identityId = assertIdentityId(await promptIdentityId());
+  } else {
+    const [baseRaw, clientIdRaw, clientSecretRaw, idLine] = await promptLines([
+      "Tenant URL (API base URL): ",
+      "Client ID: ",
+      "Client secret: ",
+      "Identity ID: ",
+    ]);
+    clients = await createClients(buildPromptedCredentials(baseRaw, clientIdRaw, clientSecretRaw));
+    identityId = assertIdentityId(idLine);
+  }
   const outDir = path.resolve(options.out || "identity-history-out");
-  const clients = createClients();
 
   info(`Listing snapshots for ${identityId}.`);
   let rawSnapshots: unknown[];
@@ -1324,6 +1504,17 @@ function selfTest(): void {
     startFailed = true;
   }
   assert(startFailed, "invalid calendar date");
+  assert(
+    assertTenantUrl("https://tenant.api.identitynow.com") === "https://tenant.api.identitynow.com",
+    "tenant URL normalization",
+  );
+  let tenantFailed = false;
+  try {
+    assertTenantUrl("http://tenant.api.identitynow.com");
+  } catch {
+    tenantFailed = true;
+  }
+  assert(tenantFailed, "tenant URL requires https");
   console.log("self-test passed");
 }
 
