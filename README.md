@@ -56,11 +56,25 @@ Create `config.json` in this directory with the same three values:
 }
 ```
 
-The SDK also accepts the same three values as environment variables, `SAIL_CLIENT_ID`, `SAIL_CLIENT_SECRET`, and `SAIL_BASE_URL`. A complete environment variable set is used before `config.json`. If neither is present, the SDK falls back to `~/.sailpoint/config.yaml`.
+The SDK also accepts the same three values as environment variables, `SAIL_CLIENT_ID`, `SAIL_CLIENT_SECRET`, and `SAIL_BASE_URL`. All three environment variables must be set for that path to be used. If they are not complete, `config.json` in the working directory is read next.
+
+When neither environment variables nor `config.json` supplies all three values, the export asks for them at the terminal. It does not read `~/.sailpoint/config.yaml` in that case.
 
 ## Prompts
 
-Starting the export asks for one value. The date window, output directory, and worker count are flags, not prompts.
+Starting the export may ask for tenant credentials, then the identity id. The date window, output directory, and worker count are flags, not prompts.
+
+### Tenant credentials
+
+These appear only when `SAIL_BASE_URL`, `SAIL_CLIENT_ID`, and `SAIL_CLIENT_SECRET` are not all set and `config.json` is missing or incomplete.
+
+```text
+Tenant URL (API base URL):
+Client ID:
+Client secret:
+```
+
+Enter the tenant API base URL (for example `https://<tenant>.api.identitynow.com`), the personal access token or API client id, and the client secret. The tenant URL must use `https`. The client secret is visible while you type.
 
 ### Identity ID
 
@@ -179,7 +193,7 @@ The command bundles the script and the SailPoint SDK, then injects that bundle i
 
 `dist/` is gitignored. The build downloads the Node.js archives once and checks them against the published SHA-256 sums.
 
-Run the file for the machine you are on. The prompts, `--start`, `--out`, and `--workers` are the same as `npx tsx export-identity-history.ts`. Put `config.json` in the working directory, or set `SAIL_BASE_URL`, `SAIL_CLIENT_ID`, and `SAIL_CLIENT_SECRET`.
+Run the file for the machine you are on. The prompts, `--start`, `--out`, and `--workers` are the same as `npx tsx export-identity-history.ts`. Put `config.json` in the working directory, set `SAIL_BASE_URL`, `SAIL_CLIENT_ID`, and `SAIL_CLIENT_SECRET`, or enter the tenant values at the prompt.
 
 ```bash
 ./dist/identity-history-linux-x64
